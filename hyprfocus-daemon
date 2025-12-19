@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# hyprfocus-daemon - Capture workspace thumbnails on events
+# Listens for workspace changes and captures thumbnails automatically
+
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/hyprfocus"
+LOG_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/hyprfocus/daemon.log"
+THUMB_SCALE=0.15
+CAPTURE_DELAY=0.3
+PERIODIC_INTERVAL=7  # seconds between periodic captures
+
+mkdir -p "$CACHE_DIR"
+
+log() { 
+    local msg="[$(date '+%H:%M:%S')] $*"
+    echo "$msg"
+    echo "$msg" >> "$LOG_FILE"
+}
+
+# Get focused monitor
+get_focused_monitor() {
+    hyprctl monitors -j | jq -r '.[] | select(.focused) | .name'
+}
+
+# Get active workspace ID  
+get_active_workspace() {
+    hyprctl activeworkspace -j | jq -r '.id'
+}
+
+# Capture a specific workspace on a specific monitor
+capture_workspace_on_monitor() {
+    local ws_id="$1"
+    local monitor="$2"
+    
+    if grim -o "$monitor" -s "$THUMB_SCALE" "$CACHE_DIR/workspace-$ws_id.png" 2>/dev/null; then
+        log "Captured workspace $ws_id on $monitor"
+    fi
+}
+
+# Capture current workspace (per-monitor)
+capture() {
+    local ws_id monitor
+    ws_id=$(get_active_workspace)
+    monitor=$(get_focused_monitor)
+    
+    if [[ -z "$ws_id" || -z "$monitor" ]]; then
+        log "ERROR: Could not get workspace ($ws_id) or monitor ($monitor)"
+        return 1
+    fi
+    
+    capture_workspace_on_monitor "$ws_id" "$monitor"
+}
+
+# Capture all workspaces visible on all monitors
+capture_all_monitors() {
+    # Get all monitors and their active workspaces
+    hyprctl monitors -j | jq -r '.[] | "\(.name) \(.activeWorkspace.id)"' | while read -r monitor ws_id; do
+        if [[ -n "$monitor" && -n "$ws_id" ]]; then
+            capture_workspace_on_monitor "$ws_id" "$monitor"
+        fi
+    done
+}
+
+# Capture with delay
+capture_delayed() {
+    sleep "$CAPTURE_DELAY"
+    capture
+}
+
+# Periodic capture in background - captures all monitors
+periodic_capture() {
+    log "Periodic capture started (every ${PERIODIC_INTERVAL}s, all monitors)"
+    while true; do
+        sleep "$PERIODIC_INTERVAL"
+        capture_all_monitors
+    done
+}
+
+# Clear old thumbnails on startup
+clear_cache() {
+    log "Clearing old thumbnails..."
+    rm -f "$CACHE_DIR"/workspace-*.png
+}
+
+# Listen for Hyprland events
+listen_events() {
+    # Truncate old log
+    echo "" > "$LOG_FILE"
+    log "Daemon started (PID: $$)"
+    
+    # Clear old thumbnails from previous session
+    clear_cache
+    
+    log "Capturing on workspace switch + every ${PERIODIC_INTERVAL}s"
+    
+    # Start periodic capture in background
+    periodic_capture &
+    local periodic_pid=$!
+    log "Periodic capture PID: $periodic_pid"
+    
+    trap "log 'Stopping...'; kill $periodic_pid 2>/dev/null; exit 0" EXIT INT TERM
+    
+    # Capture current workspace immediately
+    sleep 0.5  # Wait for Hyprland to be ready
+    capture
+    
+    # Listen for events
+    local socket="$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock"
+    
+    if [[ ! -S "$socket" ]]; then
+        log "ERROR: Hyprland socket not found: $socket"
+        exit 1
+    fi
+    
+    log "Listening on socket: $socket"
+    
+    socat -U - "UNIX-CONNECT:$socket" 2>/dev/null | while IFS= read -r line; do
+        case "$line" in
+            workspace\>\>*|workspacev2\>\>*)
+                log "Event: $line"
+                capture_delayed &
+                ;;
+            createworkspace\>\>*|createworkspacev2\>\>*)
+                log "Event: $line"
+                capture_delayed &
+                ;;
+        esac
+    done
+    
+    log "Socket connection ended"
+}
+
+main() {
+    case "${1:-}" in
+        --start)
+            # Properly daemonize - detach from terminal
+            for cmd in hyprctl jq grim socat setsid; do
+                command -v "$cmd" &>/dev/null || { echo "Missing: $cmd"; exit 1; }
+            done
+            [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] || { echo "Hyprland not running"; exit 1; }
+            
+            echo "Starting daemon..."
+            setsid "$0" </dev/null &>/dev/null &
+            sleep 1
+            if pgrep -f "hyprfocus-daemon" >/dev/null 2>&1; then
+                echo "Daemon started (PID: $(pgrep -f 'hyprfocus-daemon' | head -1))"
+            else
+                echo "Failed to start daemon"
+                exit 1
+            fi
+            ;;
+        --stop)
+            pkill -f "hyprfocus-daemon" 2>/dev/null || true
+            echo "Stopped"
+            ;;
+        --restart)
+            "$0" --stop
+            sleep 1
+            "$0" --start
+            ;;
+        --status)
+            if pgrep -f "hyprfocus-daemon" >/dev/null 2>&1; then
+                echo "Running (PID: $(pgrep -f 'hyprfocus-daemon' | head -1))"
+            else
+                echo "Not running"
+            fi
+            ;;
+        --log)
+            tail -f "$LOG_FILE"
+            ;;
+        --clear)
+            clear_cache
+            echo "Cache cleared"
+            ;;
+        --help|-h)
+            echo "hyprfocus-daemon - Background thumbnail capture"
+            echo ""
+            echo "Usage: hyprfocus-daemon [OPTION]"
+            echo ""
+            echo "Options:"
+            echo "  --start    Start daemon (detached from terminal)"
+            echo "  --stop     Stop running daemon"
+            echo "  --restart  Restart daemon"
+            echo "  --status   Check if daemon is running"
+            echo "  --log      Watch daemon log"
+            echo "  --clear    Clear thumbnail cache"
+            echo "  --help     Show this help"
+            echo ""
+            echo "For hyprland.conf use: exec-once = hyprfocus-daemon --start"
+            ;;
+        *)
+            # Direct run (for exec-once or internal use)
+            for cmd in hyprctl jq grim socat; do
+                command -v "$cmd" &>/dev/null || { echo "Missing: $cmd"; exit 1; }
+            done
+            [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] || { echo "Hyprland not running"; exit 1; }
+            
+            listen_events
+            ;;
+    esac
+}
+
+main "$@"

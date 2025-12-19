@@ -1,0 +1,265 @@
+#!/usr/bin/env bash
+# hyprfocus - Hyprland workspace switcher with thumbnail grid
+# Uses rofi for grid display of workspace thumbnails
+
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/hyprfocus"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hyprfocus"
+KITTY_THEME="${HOME}/.config/omarchy/current/theme/kitty.conf"
+THUMB_SCALE=0.15
+
+# Debug mode
+DEBUG="${HYPRFOCUS_DEBUG:-0}"
+debug() { [[ "$DEBUG" == "1" ]] && echo "[DEBUG] $*" >&2; }
+
+# Ensure directories exist
+mkdir -p "$CACHE_DIR" "$CONFIG_DIR"
+
+# Check dependencies
+check_deps() {
+    local missing=()
+    for cmd in hyprctl rofi jq grim; do
+        command -v "$cmd" &>/dev/null || missing+=("$cmd")
+    done
+    
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "Error: Missing: ${missing[*]}" >&2
+        exit 1
+    fi
+}
+
+# Get all workspace IDs sorted
+get_workspace_ids() {
+    hyprctl workspaces -j | jq -r 'sort_by(.id) | .[].id'
+}
+
+# Get current active workspace ID
+get_active_workspace() {
+    hyprctl activeworkspace -j | jq -r '.id'
+}
+
+# Get focused monitor name
+get_focused_monitor() {
+    hyprctl monitors -j | jq -r '.[] | select(.focused) | .name'
+}
+
+# Capture workspace thumbnail (per-monitor, fast, low-res)
+capture_workspace() {
+    local ws_id="$1"
+    local monitor
+    monitor=$(get_focused_monitor)
+    # Capture only the focused monitor, scaled down
+    grim -o "$monitor" -s "$THUMB_SCALE" "$CACHE_DIR/workspace-$ws_id.png" 2>/dev/null || true
+}
+
+# Capture current workspace
+capture_current() {
+    capture_workspace "$(get_active_workspace)"
+}
+
+# Capture all workspaces
+capture_all() {
+    local current_ws
+    current_ws=$(get_active_workspace)
+    
+    for ws_id in $(get_workspace_ids); do
+        hyprctl dispatch workspace "$ws_id" >/dev/null 2>&1
+        sleep 0.05
+        capture_workspace "$ws_id"
+    done
+    
+    hyprctl dispatch workspace "$current_ws" >/dev/null 2>&1
+}
+
+# Get thumbnail path
+get_thumbnail() {
+    local thumb="$CACHE_DIR/workspace-$1.png"
+    [[ -f "$thumb" ]] && echo "$thumb"
+}
+
+# Parse color from kitty.conf
+get_kitty_color() {
+    local key="$1"
+    local default="$2"
+    if [[ -f "$KITTY_THEME" ]]; then
+        local val
+        val=$(grep -E "^${key}\s+" "$KITTY_THEME" | awk '{print $2}' | head -1)
+        [[ -n "$val" ]] && echo "$val" && return
+    fi
+    echo "$default"
+}
+
+# Create rofi theme from kitty colors
+create_rofi_theme() {
+    local bg fg accent accent_alt
+    bg=$(get_kitty_color "background" "#1e1e2e")
+    fg=$(get_kitty_color "foreground" "#cdd6f4")
+    accent=$(get_kitty_color "color4" "#89b4fa")      # blue
+    accent_alt=$(get_kitty_color "color8" "#313244")  # bright black
+    
+    debug "Theme colors: bg=$bg fg=$fg accent=$accent"
+    
+    cat > "$CONFIG_DIR/grid.rasi" << THEME
+* {
+    background:     ${bg}ee;
+    background-alt: ${bg};
+    foreground:     ${fg};
+    selected:       ${accent};
+    font: "monospace 12";
+}
+
+window {
+    width:            70%;
+    height:           60%;
+    background-color: @background;
+    border:           2px;
+    border-color:     @selected;
+    border-radius:    12px;
+    padding:          15px;
+}
+
+mainbox {
+    children: [listview];
+    background-color: transparent;
+}
+
+listview {
+    columns:          3;
+    lines:            2;
+    flow:             horizontal;
+    cycle:            true;
+    scrollbar:        false;
+    spacing:          8px;
+    background-color: transparent;
+}
+
+element {
+    orientation:      vertical;
+    padding:          8px;
+    border-radius:    8px;
+    background-color: @background-alt;
+}
+
+element selected {
+    border:           3px;
+    border-color:     @selected;
+    background-color: @background-alt;
+}
+
+element-icon {
+    size:             200px;
+    horizontal-align: 0.5;
+    border-radius:    4px;
+    background-color: transparent;
+}
+
+element-text {
+    horizontal-align: 0.5;
+    padding:          4px 0 0 0;
+    text-color:       @foreground;
+    background-color: transparent;
+}
+THEME
+}
+
+# Build and run rofi
+run_selector() {
+    # Toggle behavior: if rofi is already running, kill it and exit
+    if pgrep -x rofi >/dev/null 2>&1; then
+        pkill -x rofi
+        return 0
+    fi
+    
+    debug "Starting selector"
+    
+    local active_ws
+    active_ws=$(get_active_workspace)
+    debug "Active workspace: $active_ws"
+    
+    create_rofi_theme
+    debug "Theme created"
+    
+    # Calculate selected row
+    local selected_idx=0 idx=0
+    for ws in $(get_workspace_ids); do
+        [[ "$ws" == "$active_ws" ]] && selected_idx=$idx && break
+        ((idx++))
+    done
+    debug "Selected index: $selected_idx"
+    
+    # Build entries and pipe to rofi
+    local selected
+    selected=$(
+        for ws_id in $(get_workspace_ids); do
+            local thumb
+            thumb=$(get_thumbnail "$ws_id")
+            if [[ -n "$thumb" ]]; then
+                echo -en "${ws_id}\0icon\x1f${thumb}\n"
+            else
+                echo "$ws_id"
+            fi
+        done | rofi -dmenu \
+            -theme "$CONFIG_DIR/grid.rasi" \
+            -show-icons \
+            -kb-row-up "Up,k" \
+            -kb-row-down "Down,j" \
+            -kb-row-left "h" \
+            -kb-row-right "l" \
+            -kb-custom-1 "space" \
+            -kb-cancel "Escape,q" \
+            -selected-row "$selected_idx" \
+            -p "" 2>/dev/null
+    )
+    local exit_code=$?
+    debug "Exit: $exit_code, selected: '$selected'"
+    
+    # Handle result
+    if [[ $exit_code -eq 10 ]]; then
+        # Space pressed - create new workspace
+        # Find next available workspace ID
+        local max_ws=0
+        for ws in $(get_workspace_ids); do
+            [[ $ws -gt $max_ws ]] && max_ws=$ws
+        done
+        local new_ws=$((max_ws + 1))
+        debug "Creating new workspace $new_ws"
+        hyprctl dispatch workspace "$new_ws"
+    elif [[ $exit_code -eq 0 && -n "$selected" && "$selected" =~ ^[0-9]+$ ]]; then
+        # Enter pressed - switch to selected workspace
+        hyprctl dispatch workspace "$selected"
+    fi
+}
+
+# Main
+case "${1:-}" in
+    --capture)
+        capture_current
+        echo "Captured workspace $(get_active_workspace)"
+        ;;
+    --capture-all)
+        echo "Capturing all workspaces..."
+        capture_all
+        echo "Done"
+        ;;
+    --refresh)
+        rm -f "$CACHE_DIR"/workspace-*.png
+        capture_all
+        ;;
+    --debug)
+        export HYPRFOCUS_DEBUG=1
+        check_deps
+        run_selector
+        ;;
+    --check)
+        check_deps
+        echo "OK"
+        ;;
+    --help|-h)
+        echo "hyprfocus - Workspace switcher with thumbnails"
+        echo ""
+        echo "Usage: hyprfocus [--capture|--capture-all|--refresh|--debug|--check]"
+        ;;
+    *)
+        check_deps
+        run_selector
+        ;;
+esac
