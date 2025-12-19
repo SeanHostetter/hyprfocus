@@ -34,7 +34,7 @@
 ### Quick Install (from source)
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/hyprfocus.git
+git clone https://github.com/SeanHostetter/hyprfocus.git
 cd hyprfocus
 ./install.sh
 ```
