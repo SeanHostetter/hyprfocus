@@ -64,13 +64,48 @@ install() {
     fi
     
     ok "Installed to $INSTALL_DIR"
-    echo ""
-    echo "Add to your hyprland.conf:"
-    echo ""
-    echo "  exec-once = hyprfocus-daemon --start"
-    echo "  bind = \$mainMod, TAB, exec, $INSTALL_DIR/hyprfocus"
-    echo ""
     
+    # Hyprland config
+    local hypr_conf="$HOME/.config/hypr/hyprland.conf"
+    local hypr_lines=(
+        "# hyprfocus - workspace switcher"
+        "exec-once = hyprfocus-daemon --start"
+        "bind = \$mainMod, TAB, exec, $INSTALL_DIR/hyprfocus"
+        "windowrulev2 = noanim, class:^(Rofi)$"
+    )
+    
+    echo ""
+    if [[ -f "$hypr_conf" ]]; then
+        # Check if already configured
+        if grep -q "hyprfocus-daemon" "$hypr_conf" 2>/dev/null; then
+            warn "hyprland.conf already has hyprfocus config"
+        else
+            echo "Add to hyprland.conf? [y/N] "
+            read -r response
+            if [[ "$response" =~ ^[Yy]$ ]]; then
+                echo "" >> "$hypr_conf"
+                for line in "${hypr_lines[@]}"; do
+                    echo "$line" >> "$hypr_conf"
+                done
+                ok "Added to hyprland.conf"
+                echo "  Run: hyprctl reload"
+            else
+                echo "Add manually to $hypr_conf:"
+                echo ""
+                for line in "${hypr_lines[@]}"; do
+                    echo "  $line"
+                done
+            fi
+        fi
+    else
+        echo "Add to your hyprland.conf:"
+        echo ""
+        for line in "${hypr_lines[@]}"; do
+            echo "  $line"
+        done
+    fi
+    
+    echo ""
     # Check if ~/.local/bin is in PATH
     if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
         warn "$INSTALL_DIR is not in your PATH"

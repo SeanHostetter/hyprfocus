@@ -33,6 +33,12 @@ post_install() {
     echo "  cp /etc/hyprfocus/config.default ~/.config/hyprfocus/config"
     echo ""
     echo "Add to hyprland.conf:"
+    echo "  # hyprfocus - workspace switcher"
     echo "  exec-once = hyprfocus-daemon --start"
     echo "  bind = \$mainMod, TAB, exec, hyprfocus"
+    echo "  windowrulev2 = noanim, class:^(Rofi)$"
+}
+
+post_upgrade() {
+    post_install
 }
