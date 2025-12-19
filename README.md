@@ -24,10 +24,10 @@
 
 ## Note on performance and limitations:
 - 'grim' is used for screenshots to generate thumbnails, which can be slow on large displays. A screenshot is captured every 7 seconds, on workspace switch, and on workspace creation. A scale of 0.15 is used to speed up capture.
--The user+sys time of each screenshot is about 0.082 seconds on my system.
+- The user+sys time of each screenshot is about 0.082 seconds on my system.
 - Hyprfocus is written in bash, which is not the most performant, and is not multithreaded
--If you have any suggestions for improvement, please open an issue or submit a pull request, or fork it and make your own version! I made this in a few hours for my own use, so I will likely not be doing a lot of continuous development on it.
--you can turn off thumbnail generation by setting the CAPTURE_DELAY variable to 0 in the hyprfocus-daemon script.
+- If you have any suggestions for improvement, please open an issue or submit a pull request, or fork it and make your own version! I made this in a few hours for my own use, so I will likely not be doing a lot of continuous development on it.
+- You can turn off thumbnail generation by setting the CAPTURE_DELAY variable to 0 in the hyprfocus-daemon script.
 
 ## Installation
 
