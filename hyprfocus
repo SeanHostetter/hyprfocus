@@ -204,6 +204,7 @@ run_selector() {
         done | rofi -dmenu \
             -theme "$CONFIG_DIR/grid.rasi" \
             -show-icons \
+            -normal-window \
             -kb-row-up "Up,k" \
             -kb-row-down "Down,j" \
             -kb-row-left "h" \
