@@ -2,31 +2,40 @@
 # hyprfocus-daemon - Capture workspace thumbnails on events
 # Listens for workspace changes and captures thumbnails automatically
 
+# === DIRECTORIES ===
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/hyprfocus"
-LOG_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/hyprfocus/daemon.log"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hyprfocus"
+CONFIG_FILE="$CONFIG_DIR/config"
+LOG_FILE="$CACHE_DIR/daemon.log"
+
+# === DEFAULT CONFIG ===
+CAPTURE_ENABLED=true
 THUMB_SCALE=0.15
 CAPTURE_DELAY=0.3
-PERIODIC_INTERVAL=7  # seconds between periodic captures
+PERIODIC_INTERVAL=7
+CLEAR_CACHE_ON_START=true
 
-mkdir -p "$CACHE_DIR"
+# === LOAD USER CONFIG ===
+mkdir -p "$CACHE_DIR" "$CONFIG_DIR"
+[[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
 
+# === LOGGING ===
 log() { 
     local msg="[$(date '+%H:%M:%S')] $*"
     echo "$msg"
     echo "$msg" >> "$LOG_FILE"
 }
 
-# Get focused monitor
+# === MONITOR/WORKSPACE FUNCTIONS ===
 get_focused_monitor() {
     hyprctl monitors -j | jq -r '.[] | select(.focused) | .name'
 }
 
-# Get active workspace ID  
 get_active_workspace() {
     hyprctl activeworkspace -j | jq -r '.id'
 }
 
-# Capture a specific workspace on a specific monitor
+# === CAPTURE FUNCTIONS ===
 capture_workspace_on_monitor() {
     local ws_id="$1"
     local monitor="$2"
@@ -36,8 +45,9 @@ capture_workspace_on_monitor() {
     fi
 }
 
-# Capture current workspace (per-monitor)
 capture() {
+    [[ "$CAPTURE_ENABLED" != "true" ]] && return 0
+    
     local ws_id monitor
     ws_id=$(get_active_workspace)
     monitor=$(get_focused_monitor)
@@ -50,9 +60,9 @@ capture() {
     capture_workspace_on_monitor "$ws_id" "$monitor"
 }
 
-# Capture all workspaces visible on all monitors
 capture_all_monitors() {
-    # Get all monitors and their active workspaces
+    [[ "$CAPTURE_ENABLED" != "true" ]] && return 0
+    
     hyprctl monitors -j | jq -r '.[] | "\(.name) \(.activeWorkspace.id)"' | while read -r monitor ws_id; do
         if [[ -n "$monitor" && -n "$ws_id" ]]; then
             capture_workspace_on_monitor "$ws_id" "$monitor"
@@ -60,14 +70,18 @@ capture_all_monitors() {
     done
 }
 
-# Capture with delay
 capture_delayed() {
     sleep "$CAPTURE_DELAY"
     capture
 }
 
-# Periodic capture in background - captures all monitors
+# === PERIODIC CAPTURE ===
 periodic_capture() {
+    [[ "$PERIODIC_INTERVAL" == "0" ]] && {
+        log "Periodic capture disabled (interval=0)"
+        return 0
+    }
+    
     log "Periodic capture started (every ${PERIODIC_INTERVAL}s, all monitors)"
     while true; do
         sleep "$PERIODIC_INTERVAL"
@@ -75,32 +89,32 @@ periodic_capture() {
     done
 }
 
-# Clear old thumbnails on startup
+# === CACHE MANAGEMENT ===
 clear_cache() {
     log "Clearing old thumbnails..."
     rm -f "$CACHE_DIR"/workspace-*.png
 }
 
-# Listen for Hyprland events
+# === MAIN EVENT LOOP ===
 listen_events() {
     # Truncate old log
     echo "" > "$LOG_FILE"
     log "Daemon started (PID: $$)"
+    log "Config: capture=$CAPTURE_ENABLED scale=$THUMB_SCALE interval=$PERIODIC_INTERVAL"
     
-    # Clear old thumbnails from previous session
-    clear_cache
+    # Clear cache on start if enabled
+    [[ "$CLEAR_CACHE_ON_START" == "true" ]] && clear_cache
     
-    log "Capturing on workspace switch + every ${PERIODIC_INTERVAL}s"
-    
-    # Start periodic capture in background
-    periodic_capture &
-    local periodic_pid=$!
-    log "Periodic capture PID: $periodic_pid"
-    
-    trap "log 'Stopping...'; kill $periodic_pid 2>/dev/null; exit 0" EXIT INT TERM
+    # Start periodic capture in background (if enabled)
+    if [[ "$PERIODIC_INTERVAL" != "0" ]]; then
+        periodic_capture &
+        local periodic_pid=$!
+        log "Periodic capture PID: $periodic_pid"
+        trap "log 'Stopping...'; kill $periodic_pid 2>/dev/null; exit 0" EXIT INT TERM
+    fi
     
     # Capture current workspace immediately
-    sleep 0.5  # Wait for Hyprland to be ready
+    sleep 0.5
     capture
     
     # Listen for events
@@ -111,7 +125,7 @@ listen_events() {
         exit 1
     fi
     
-    log "Listening on socket: $socket"
+    log "Listening on socket"
     
     socat -U - "UNIX-CONNECT:$socket" 2>/dev/null | while IFS= read -r line; do
         case "$line" in
@@ -129,10 +143,11 @@ listen_events() {
     log "Socket connection ended"
 }
 
+# === MAIN ===
 main() {
     case "${1:-}" in
         --start)
-            # Properly daemonize - detach from terminal
+            # Properly daemonize
             for cmd in hyprctl jq grim socat setsid; do
                 command -v "$cmd" &>/dev/null || { echo "Missing: $cmd"; exit 1; }
             done
@@ -177,18 +192,18 @@ main() {
             echo "Usage: hyprfocus-daemon [OPTION]"
             echo ""
             echo "Options:"
-            echo "  --start    Start daemon (detached from terminal)"
-            echo "  --stop     Stop running daemon"
+            echo "  --start    Start daemon (detached)"
+            echo "  --stop     Stop daemon"
             echo "  --restart  Restart daemon"
-            echo "  --status   Check if daemon is running"
+            echo "  --status   Check if running"
             echo "  --log      Watch daemon log"
             echo "  --clear    Clear thumbnail cache"
             echo "  --help     Show this help"
             echo ""
-            echo "For hyprland.conf use: exec-once = hyprfocus-daemon --start"
+            echo "Config: $CONFIG_FILE"
             ;;
         *)
-            # Direct run (for exec-once or internal use)
+            # Direct run (for exec-once)
             for cmd in hyprctl jq grim socat; do
                 command -v "$cmd" &>/dev/null || { echo "Missing: $cmd"; exit 1; }
             done

@@ -1,0 +1,54 @@
+# hyprfocus configuration
+# Location: ~/.config/hyprfocus/config
+
+# =============================================================================
+# THUMBNAIL CAPTURE
+# =============================================================================
+
+# Enable/disable thumbnail capture (true/false)
+# Set to false to completely disable screenshots
+CAPTURE_ENABLED=true
+
+# Capture scale (0.1 = 10%, 0.15 = 15%, 0.25 = 25%)
+# Lower = faster capture, smaller files, less detail
+THUMB_SCALE=0.15
+
+# Periodic capture interval in seconds
+# Set to 0 to disable periodic captures (only capture on workspace switch)
+PERIODIC_INTERVAL=7
+
+# Delay before capturing after workspace switch (seconds)
+# Allows windows to finish rendering
+CAPTURE_DELAY=0.3
+
+# =============================================================================
+# GRID APPEARANCE
+# =============================================================================
+
+# Number of columns in the grid
+GRID_COLUMNS=3
+
+# Number of rows in the grid
+GRID_ROWS=2
+
+# Icon/thumbnail size in pixels
+ICON_SIZE=200
+
+# Window width (percentage of screen)
+WINDOW_WIDTH=70
+
+# Window height (percentage of screen)
+WINDOW_HEIGHT=60
+
+# =============================================================================
+# BEHAVIOR
+# =============================================================================
+
+# Clear thumbnail cache on daemon start (true/false)
+CLEAR_CACHE_ON_START=true
+
+# Use theme from kitty config (true/false)
+USE_KITTY_THEME=true
+
+# Custom theme path (only used if USE_KITTY_THEME=false)
+# CUSTOM_THEME_PATH=~/.config/hyprfocus/theme.rasi

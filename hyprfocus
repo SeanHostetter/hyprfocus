@@ -2,19 +2,31 @@
 # hyprfocus - Hyprland workspace switcher with thumbnail grid
 # Uses rofi for grid display of workspace thumbnails
 
+# === DIRECTORIES ===
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/hyprfocus"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hyprfocus"
+CONFIG_FILE="$CONFIG_DIR/config"
 KITTY_THEME="${HOME}/.config/omarchy/current/theme/kitty.conf"
-THUMB_SCALE=0.15
 
-# Debug mode
+# === DEFAULT CONFIG ===
+CAPTURE_ENABLED=true
+THUMB_SCALE=0.15
+GRID_COLUMNS=3
+GRID_ROWS=2
+ICON_SIZE=200
+WINDOW_WIDTH=70
+WINDOW_HEIGHT=60
+USE_KITTY_THEME=true
+
+# === LOAD USER CONFIG ===
+mkdir -p "$CACHE_DIR" "$CONFIG_DIR"
+[[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
+
+# === DEBUG ===
 DEBUG="${HYPRFOCUS_DEBUG:-0}"
 debug() { [[ "$DEBUG" == "1" ]] && echo "[DEBUG] $*" >&2; }
 
-# Ensure directories exist
-mkdir -p "$CACHE_DIR" "$CONFIG_DIR"
-
-# Check dependencies
+# === DEPENDENCIES ===
 check_deps() {
     local missing=()
     for cmd in hyprctl rofi jq grim; do
@@ -27,36 +39,31 @@ check_deps() {
     fi
 }
 
-# Get all workspace IDs sorted
+# === WORKSPACE FUNCTIONS ===
 get_workspace_ids() {
     hyprctl workspaces -j | jq -r 'sort_by(.id) | .[].id'
 }
 
-# Get current active workspace ID
 get_active_workspace() {
     hyprctl activeworkspace -j | jq -r '.id'
 }
 
-# Get focused monitor name
 get_focused_monitor() {
     hyprctl monitors -j | jq -r '.[] | select(.focused) | .name'
 }
 
-# Capture workspace thumbnail (per-monitor, fast, low-res)
+# === CAPTURE ===
 capture_workspace() {
     local ws_id="$1"
     local monitor
     monitor=$(get_focused_monitor)
-    # Capture only the focused monitor, scaled down
     grim -o "$monitor" -s "$THUMB_SCALE" "$CACHE_DIR/workspace-$ws_id.png" 2>/dev/null || true
 }
 
-# Capture current workspace
 capture_current() {
     capture_workspace "$(get_active_workspace)"
 }
 
-# Capture all workspaces
 capture_all() {
     local current_ws
     current_ws=$(get_active_workspace)
@@ -70,17 +77,16 @@ capture_all() {
     hyprctl dispatch workspace "$current_ws" >/dev/null 2>&1
 }
 
-# Get thumbnail path
 get_thumbnail() {
     local thumb="$CACHE_DIR/workspace-$1.png"
     [[ -f "$thumb" ]] && echo "$thumb"
 }
 
-# Parse color from kitty.conf
+# === THEMING ===
 get_kitty_color() {
     local key="$1"
     local default="$2"
-    if [[ -f "$KITTY_THEME" ]]; then
+    if [[ "$USE_KITTY_THEME" == "true" && -f "$KITTY_THEME" ]]; then
         local val
         val=$(grep -E "^${key}\s+" "$KITTY_THEME" | awk '{print $2}' | head -1)
         [[ -n "$val" ]] && echo "$val" && return
@@ -88,15 +94,14 @@ get_kitty_color() {
     echo "$default"
 }
 
-# Create rofi theme from kitty colors
 create_rofi_theme() {
     local bg fg accent accent_alt
     bg=$(get_kitty_color "background" "#1e1e2e")
     fg=$(get_kitty_color "foreground" "#cdd6f4")
-    accent=$(get_kitty_color "color4" "#89b4fa")      # blue
-    accent_alt=$(get_kitty_color "color8" "#313244")  # bright black
+    accent=$(get_kitty_color "color4" "#89b4fa")
+    accent_alt=$(get_kitty_color "color8" "#313244")
     
-    debug "Theme colors: bg=$bg fg=$fg accent=$accent"
+    debug "Theme: bg=$bg fg=$fg columns=$GRID_COLUMNS rows=$GRID_ROWS"
     
     cat > "$CONFIG_DIR/grid.rasi" << THEME
 * {
@@ -108,8 +113,8 @@ create_rofi_theme() {
 }
 
 window {
-    width:            70%;
-    height:           60%;
+    width:            ${WINDOW_WIDTH}%;
+    height:           ${WINDOW_HEIGHT}%;
     background-color: @background;
     border:           2px;
     border-color:     @selected;
@@ -123,8 +128,8 @@ mainbox {
 }
 
 listview {
-    columns:          3;
-    lines:            2;
+    columns:          ${GRID_COLUMNS};
+    lines:            ${GRID_ROWS};
     flow:             horizontal;
     cycle:            true;
     scrollbar:        false;
@@ -146,7 +151,7 @@ element selected {
 }
 
 element-icon {
-    size:             200px;
+    size:             ${ICON_SIZE}px;
     horizontal-align: 0.5;
     border-radius:    4px;
     background-color: transparent;
@@ -161,9 +166,9 @@ element-text {
 THEME
 }
 
-# Build and run rofi
+# === ROFI SELECTOR ===
 run_selector() {
-    # Toggle behavior: if rofi is already running, kill it and exit
+    # Toggle: if rofi running, kill it
     if pgrep -x rofi >/dev/null 2>&1; then
         pkill -x rofi
         return 0
@@ -176,7 +181,6 @@ run_selector() {
     debug "Active workspace: $active_ws"
     
     create_rofi_theme
-    debug "Theme created"
     
     # Calculate selected row
     local selected_idx=0 idx=0
@@ -214,22 +218,47 @@ run_selector() {
     
     # Handle result
     if [[ $exit_code -eq 10 ]]; then
-        # Space pressed - create new workspace
-        # Find next available workspace ID
+        # Space: create new workspace
         local max_ws=0
         for ws in $(get_workspace_ids); do
             [[ $ws -gt $max_ws ]] && max_ws=$ws
         done
         local new_ws=$((max_ws + 1))
-        debug "Creating new workspace $new_ws"
+        debug "Creating workspace $new_ws"
         hyprctl dispatch workspace "$new_ws"
     elif [[ $exit_code -eq 0 && -n "$selected" && "$selected" =~ ^[0-9]+$ ]]; then
-        # Enter pressed - switch to selected workspace
         hyprctl dispatch workspace "$selected"
     fi
 }
 
-# Main
+# === CONFIG MANAGEMENT ===
+init_config() {
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        local script_dir
+        script_dir="$(dirname "$(readlink -f "$0")")"
+        if [[ -f "$script_dir/config.default" ]]; then
+            cp "$script_dir/config.default" "$CONFIG_FILE"
+        else
+            cat > "$CONFIG_FILE" << 'EOF'
+# hyprfocus config - see README for options
+CAPTURE_ENABLED=true
+THUMB_SCALE=0.15
+PERIODIC_INTERVAL=7
+GRID_COLUMNS=3
+GRID_ROWS=2
+ICON_SIZE=200
+WINDOW_WIDTH=70
+WINDOW_HEIGHT=60
+USE_KITTY_THEME=true
+EOF
+        fi
+        echo "Created config: $CONFIG_FILE"
+    else
+        echo "Config exists: $CONFIG_FILE"
+    fi
+}
+
+# === MAIN ===
 case "${1:-}" in
     --capture)
         capture_current
@@ -244,6 +273,13 @@ case "${1:-}" in
         rm -f "$CACHE_DIR"/workspace-*.png
         capture_all
         ;;
+    --config)
+        init_config
+        ;;
+    --edit-config)
+        init_config >/dev/null
+        ${EDITOR:-nano} "$CONFIG_FILE"
+        ;;
     --debug)
         export HYPRFOCUS_DEBUG=1
         check_deps
@@ -256,7 +292,18 @@ case "${1:-}" in
     --help|-h)
         echo "hyprfocus - Workspace switcher with thumbnails"
         echo ""
-        echo "Usage: hyprfocus [--capture|--capture-all|--refresh|--debug|--check]"
+        echo "Usage: hyprfocus [OPTION]"
+        echo ""
+        echo "Options:"
+        echo "  (none)        Open workspace switcher"
+        echo "  --capture     Capture current workspace"
+        echo "  --refresh     Refresh all thumbnails"
+        echo "  --config      Create/show config file"
+        echo "  --edit-config Edit config file"
+        echo "  --debug       Run with debug output"
+        echo "  --help        Show this help"
+        echo ""
+        echo "Config: $CONFIG_FILE"
         ;;
     *)
         check_deps

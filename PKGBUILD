@@ -13,8 +13,26 @@ sha256sums=('SKIP')
 package() {
     cd "$srcdir/$pkgname-$pkgver"
     
+    # Install binaries
     install -Dm755 hyprfocus "$pkgdir/usr/bin/hyprfocus"
     install -Dm755 hyprfocus-daemon "$pkgdir/usr/bin/hyprfocus-daemon"
+    
+    # Install default config to /etc (user can copy to ~/.config/hyprfocus/config)
+    install -Dm644 config.default "$pkgdir/etc/hyprfocus/config.default"
+    
+    # Install docs
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
+
+post_install() {
+    echo "hyprfocus installed!"
+    echo ""
+    echo "To create your config:"
+    echo "  mkdir -p ~/.config/hyprfocus"
+    echo "  cp /etc/hyprfocus/config.default ~/.config/hyprfocus/config"
+    echo ""
+    echo "Add to hyprland.conf:"
+    echo "  exec-once = hyprfocus-daemon --start"
+    echo "  bind = \$mainMod, TAB, exec, hyprfocus"
 }

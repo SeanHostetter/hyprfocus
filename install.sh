@@ -55,6 +55,14 @@ install() {
     cp "$SCRIPT_DIR/hyprfocus-daemon" "$INSTALL_DIR/"
     chmod +x "$INSTALL_DIR/hyprfocus" "$INSTALL_DIR/hyprfocus-daemon"
     
+    # Install default config if user doesn't have one
+    local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/hyprfocus"
+    mkdir -p "$config_dir"
+    if [[ ! -f "$config_dir/config" && -f "$SCRIPT_DIR/config.default" ]]; then
+        cp "$SCRIPT_DIR/config.default" "$config_dir/config"
+        ok "Created config: $config_dir/config"
+    fi
+    
     ok "Installed to $INSTALL_DIR"
     echo ""
     echo "Add to your hyprland.conf:"
